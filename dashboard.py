@@ -1,55 +1,69 @@
 import streamlit as st
 import pandas as pd
-import plotly.graph_objs as go
 
-# Cargar los datos
-df = pd.read_csv("datos_maquinas.csv")
+st.set_page_config(page_title="Sala Golden", layout="wide")
 
-# Preprocesamiento simple
-df['Producción'] = pd.to_numeric(df['Producción'], errors='coerce')
-df['COIN'] = pd.to_numeric(df['COIN'], errors='coerce')
-df['Real'] = pd.to_numeric(df.get('Real', pd.Series([0]*len(df))), errors='coerce')
-df['LSTM'] = pd.to_numeric(df.get('LSTM', pd.Series([0]*len(df))), errors='coerce')
+# ————— 1. Carga de datos —————
+st.sidebar.header("🔄 Carga de datos")
+uploaded_file = st.sidebar.file_uploader("Sube tu archivo CSV", type="csv")
 
-# Título principal
+if not uploaded_file:
+    st.warning("Por favor, sube un archivo CSV desde la barra lateral para mostrar el dashboard.")
+    st.stop()
+
+df = pd.read_csv(uploaded_file)
+
+# ————— 2. Preprocesamiento —————
+for col in ['Producción','COIN','Real','LSTM']:
+    if col in df.columns:
+        df[col] = pd.to_numeric(df[col], errors='coerce')
+    else:
+        df[col] = 0
+
+if 'Fecha' in df.columns:
+    df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+
+# ————— 3. Header y métricas —————
 st.title("🎰 Sala Golden")
+c1, c2, c3, c4 = st.columns(4)
 
-# Barra superior de métricas
-col1, col2, col3, col4 = st.columns(4)
-col1.metric("Producción", f"S/. {df['Producción'].sum():,.0f}")
-col2.metric("Producción en Dólares", f"${df['Producción'].sum() / 3.37:,.0f}")
-col3.metric("COIN", f"S/. {df['COIN'].sum():,.2f}")
-col4.metric("Precisión Esperada", "90%")
+c1.metric("Producción", f"S/. {df['Producción'].sum():,.0f}")
+c2.metric("Producción en Dólares", f"${df['Producción'].sum() / 3.37:,.0f}")
+c3.metric("COIN", f"S/. {df['COIN'].sum():,.2f}")
+c4.metric("Precisión Esperada", "90%")
 
 st.markdown("---")
 
-# Fecha (placeholder visual, no interactivo aún)
-col_fecha1, col_fecha2 = st.columns(2)
-col_fecha1.date_input("Desde", pd.to_datetime("2024-09-05"))
-col_fecha2.date_input("Hasta", pd.to_datetime("2025-09-05"))
+# ————— 4. Filtros de fecha —————
+if 'Fecha' in df.columns:
+    d1, d2 = st.columns(2)
+    start_date = d1.date_input("Desde", df['Fecha'].min())
+    end_date   = d2.date_input("Hasta", df['Fecha'].max())
+    df = df[(df['Fecha'] >= pd.to_datetime(start_date)) & (df['Fecha'] <= pd.to_datetime(end_date))]
 
-# Gráfico de producción real vs predicho
-st.subheader("📈 Producción Física - LSTM")
-fig = go.Figure()
-fig.add_trace(go.Scatter(y=df['Real'], mode='lines', name='Real'))
-fig.add_trace(go.Scatter(y=df['LSTM'], mode='lines', name='Predicho (LSTM)'))
-fig.update_layout(height=300, margin=dict(l=20, r=20, t=30, b=20))
-st.plotly_chart(fig, use_container_width=True)
+# ————— 5. Gráfico nativo —————
+st.subheader("📈 Producción Física vs Predicción (LSTM)")
+chart_df = df[['Real', 'LSTM']].fillna(0)
+st.line_chart(chart_df, use_container_width=True)
 
-# Tabla de datos de máquinas
-st.subheader("📋 Datos de Máquinas - Sala Golden")
+st.markdown("---")
 
-# Selector de número de máquina
+# ————— 6. Tabla de detalle —————
+st.subheader("📋 Datos de Máquinas — Sala Golden")
+
 if 'Id Maquina' in df.columns:
-    opciones = df['Id Maquina'].dropna().unique()
-    seleccion = st.selectbox("Filtrar por Nº Máquina", options=["Todas"] + list(opciones.astype(str)))
-    if seleccion != "Todas":
-        df = df[df['Id Maquina'].astype(str) == seleccion]
+    opciones = df['Id Maquina'].dropna().unique().astype(str).tolist()
+    filtro   = st.selectbox("Filtrar por Nº Máquina", ["Todas"] + opciones)
+    if filtro != "Todas":
+        df = df[df['Id Maquina'].astype(str) == filtro]
 
-# Tabla de datos
-st.dataframe(df[['Id Maquina', 'Num Serie', 'Producción', 'COIN']].sort_values(by='Producción', ascending=False),
-             use_container_width=True)
+cols_para_mostrar = [c for c in ['Id Maquina','Num Serie','Producción','COIN'] if c in df.columns]
+st.dataframe(
+    df[cols_para_mostrar]
+      .sort_values(by='Producción', ascending=False)
+      .reset_index(drop=True),
+    use_container_width=True
+)
 
-# Pie de página
 st.markdown("---")
-st.caption("Proyecto de predicción con LSTM | Taller Integrador - 2025")
+st.caption("Proyecto de predicción con LSTM | Taller Integrador – 2025")
