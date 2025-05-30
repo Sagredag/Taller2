@@ -1,0 +1,8 @@
+streamlit>=1.24.0
+pandas
+numpy
+scikit-learn
+tensorflow
+statsmodels
+seaborn
+openpyxl
