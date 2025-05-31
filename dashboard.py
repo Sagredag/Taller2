@@ -83,4 +83,4 @@ st.dataframe(
 )
 
 st.markdown("---")
-st.caption("Proyecto de predicción con LSTM | Taller Integrador – 2025"
+st.caption("Proyecto de predicción con LSTM | Taller Integrador – 2025")
