@@ -1,24 +1,41 @@
 import streamlit as st
 import pandas as pd
+from pathlib import Path
 
 st.set_page_config(page_title="Sala Golden", layout="wide")
 
 # ————— 1. Carga de datos —————
 st.sidebar.header("🔄 Carga de datos")
-uploaded_file = st.sidebar.file_uploader("Sube tu archivo Excel/CSV", type=['xlsx','csv'])
+uploaded_file = st.sidebar.file_uploader(
+    "Sube tu archivo Excel (.xlsx) o CSV (.csv)", type=['xlsx','csv']
+)
 
 if not uploaded_file:
-    st.warning("Por favor, sube un archivo CSV desde la barra lateral para mostrar el dashboard.")
+    st.warning("Por favor, sube un archivo Excel o CSV desde la barra lateral para continuar.")
     st.stop()
 
-df = pd.read_csv(uploaded_file)
+def load_data(file) -> pd.DataFrame:
+    ext = Path(file.name).suffix.lower()
+    if ext == ".csv":
+        # Intentamos primero UTF-8, si falla, caemos en Latin-1
+        for enc in ("utf-8", "latin-1"):
+            try:
+                # pandas autodetecta separador si usamos engine="python" y sep=None
+                return pd.read_csv(file, encoding=enc, sep=None, engine="python", decimal=",")
+            except Exception:
+                continue
+        st.error("No pudo decodificar el CSV con utf-8 ni latin-1.")
+        st.stop()
+    else:
+        # Excel
+        return pd.read_excel(file, engine="openpyxl")
+
+df = load_data(uploaded_file)
 
 # ————— 2. Preprocesamiento —————
+# Convertimos las columnas clave a numérico y fecha
 for col in ['Producción','COIN','Real','LSTM']:
-    if col in df.columns:
-        df[col] = pd.to_numeric(df[col], errors='coerce')
-    else:
-        df[col] = 0
+    df[col] = pd.to_numeric(df.get(col, pd.Series()), errors='coerce').fillna(0)
 
 if 'Fecha' in df.columns:
     df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
@@ -66,4 +83,4 @@ st.dataframe(
 )
 
 st.markdown("---")
-st.caption("Proyecto de predicción con LSTM | Taller Integrador – 2025")
+st.caption("Proyecto de predicción con LSTM | Taller Integrador – 2025"
