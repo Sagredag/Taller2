@@ -1,86 +1,104 @@
 import streamlit as st
 import pandas as pd
-from pathlib import Path
+import numpy as np
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense
 
-st.set_page_config(page_title="Sala Golden", layout="wide")
+# Función para corregir reinicios de contador
+def corregir_diferencias_con_reset(serie, cap_valor=99999999):
+    s = serie.astype(float).reset_index(drop=True)
+    difs = [0.0]
+    for i in range(1, len(s)):
+        if s[i] >= s[i-1]:
+            difs.append(s[i] - s[i-1])
+        else:
+            difs.append((cap_valor - s[i-1]) + s[i] + 1)
+    return np.array(difs)
 
-# ————— 1. Carga de datos —————
-st.sidebar.header("🔄 Carga de datos")
-uploaded_file = st.sidebar.file_uploader(
-    "Sube tu archivo Excel (.xlsx) o CSV (.csv)", type=['xlsx','csv']
-)
+st.title("Producción vs Predicción con LSTM")
 
-if not uploaded_file:
-    st.warning("Por favor, sube un archivo Excel o CSV desde la barra lateral para continuar.")
-    st.stop()
+# Subida de archivo
+datos = st.file_uploader("Sube tu archivo Excel", type=["xls","xlsx"])
+if datos:
+    # 1) Lectura y selección de columnas relevantes
+    df = pd.read_excel(datos, engine='openpyxl')
+    df = df.iloc[1:].copy()
+    df.columns = ["N°","Tipo","Fecha","Desconocido","Entrada","Salida","P_Manual","CC_Manual","Billetero","Entrada_TITO","Salida_TITO"]
+    df = df[["Fecha","Entrada","Salida"]]
 
-def load_data(file) -> pd.DataFrame:
-    ext = Path(file.name).suffix.lower()
-    if ext == ".csv":
-        # Intentamos primero UTF-8, si falla, caemos en Latin-1
-        for enc in ("utf-8", "latin-1"):
-            try:
-                # pandas autodetecta separador si usamos engine="python" y sep=None
-                return pd.read_csv(file, encoding=enc, sep=None, engine="python", decimal=",")
-            except Exception:
-                continue
-        st.error("No pudo decodificar el CSV con utf-8 ni latin-1.")
-        st.stop()
-    else:
-        # Excel
-        return pd.read_excel(file, engine="openpyxl")
+    # 2) Conversión de tipos
+    df["Fecha"] = pd.to_datetime(df["Fecha"], errors='coerce')
+    # Opción de unidades: centavos o soles
+    to_soles = st.checkbox("Convertir a soles (x0.01)", value=True)
+    factor = 0.01 if to_soles else 1.0
+    df["Entrada"] = pd.to_numeric(df["Entrada"], errors='coerce') * factor
+    df["Salida"]  = pd.to_numeric(df["Salida"],  errors='coerce') * factor
+    df = df.dropna(subset=["Fecha","Entrada","Salida"]).reset_index(drop=True)
 
-df = load_data(uploaded_file)
+    # 3) Cálculo de producción (Entrada - Salida) con corrección de resets
+    diff_ent = corregir_diferencias_con_reset(df["Entrada"])
+    diff_sal = corregir_diferencias_con_reset(df["Salida"])
+    df["Produccion"] = diff_ent - diff_sal
 
-# ————— 2. Preprocesamiento —————
-# Convertimos las columnas clave a numérico y fecha
-for col in ['Producción','COIN','Real','LSTM']:
-    df[col] = pd.to_numeric(df.get(col, pd.Series()), errors='coerce').fillna(0)
+    # Mostrar tabla completa de producción por fecha
+    st.subheader("Producción por bloque de tiempo")
+    st.dataframe(df[["Fecha","Produccion"]])
 
-if 'Fecha' in df.columns:
-    df['Fecha'] = pd.to_datetime(df['Fecha'], errors='coerce')
+    # 4) Normalización de la señal
+    signal = df[["Produccion"]].values
+    scaler = MinMaxScaler()
+    signal_scaled = scaler.fit_transform(signal)
 
-# ————— 3. Header y métricas —————
-st.title("🎰 Sala Golden")
-c1, c2, c3, c4 = st.columns(4)
+    # 5) Creación de secuencias
+    def create_sequences(data, n_steps=10):
+        X, y = [], []
+        for i in range(len(data) - n_steps):
+            X.append(data[i:i+n_steps])
+            y.append(data[i+n_steps])
+        return np.array(X), np.array(y)
 
-c1.metric("Producción", f"S/. {df['Producción'].sum():,.0f}")
-c2.metric("Producción en Dólares", f"${df['Producción'].sum() / 3.37:,.0f}")
-c3.metric("COIN", f"S/. {df['COIN'].sum():,.2f}")
-c4.metric("Precisión Esperada", "90%")
+    n_steps = st.slider("Pasos para LSTM", min_value=5, max_value=50, value=10)
+    X, y = create_sequences(signal_scaled, n_steps)
 
-st.markdown("---")
+    # 6) División entrenamiento/prueba
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
 
-# ————— 4. Filtros de fecha —————
-if 'Fecha' in df.columns:
-    d1, d2 = st.columns(2)
-    start_date = d1.date_input("Desde", df['Fecha'].min())
-    end_date   = d2.date_input("Hasta", df['Fecha'].max())
-    df = df[(df['Fecha'] >= pd.to_datetime(start_date)) & (df['Fecha'] <= pd.to_datetime(end_date))]
+    # 7) Definición y entrenamiento del modelo LSTM
+    epochs = st.number_input("Épocas", min_value=1, max_value=100, value=20)
+    batch_size = st.number_input("Batch size", min_value=1, max_value=256, value=32)
+    model = Sequential([LSTM(50, input_shape=(n_steps, 1)), Dense(1)])
+    model.compile(optimizer='adam', loss='mse')
+    with st.spinner('Entrenando LSTM...'):
+        model.fit(X_train, y_train, epochs=epochs, batch_size=batch_size, verbose=0)
+    st.success('Entrenamiento completado')
 
-# ————— 5. Gráfico nativo —————
-st.subheader("📈 Producción Física vs Predicción (LSTM)")
-chart_df = df[['Real', 'LSTM']].fillna(0)
-st.line_chart(chart_df, use_container_width=True)
+    # 8) Predicciones para todo el conjunto de datos
+    y_full_pred = model.predict(np.vstack([X_train, X_test])).flatten()
+    # Desnormalización
+    delta = scaler.data_max_[0] - scaler.data_min_[0]
+    y_true_full = signal[n_steps:].flatten()
+    y_pred_full = y_full_pred * delta + scaler.data_min_[0]
 
-st.markdown("---")
+    # 9) Preparar DataFrame de predicciones
+    df_pred = pd.DataFrame({
+        'Fecha': df['Fecha'].iloc[n_steps:].reset_index(drop=True),
+        'Real': y_true_full,
+        'Predicho': y_pred_full
+    })
 
-# ————— 6. Tabla de detalle —————
-st.subheader("📋 Datos de Máquinas — Sala Golden")
+    # Agregar diaria (resample)
+    df_daily = df_pred.set_index('Fecha').resample('D').sum()
+    # Asegurar todas las fechas
+    all_dates = pd.date_range(df_daily.index.min(), df_daily.index.max(), freq='D')
+    df_daily = df_daily.reindex(all_dates, fill_value=0)
 
-if 'Id Maquina' in df.columns:
-    opciones = df['Id Maquina'].dropna().unique().astype(str).tolist()
-    filtro   = st.selectbox("Filtrar por Nº Máquina", ["Todas"] + opciones)
-    if filtro != "Todas":
-        df = df[df['Id Maquina'].astype(str) == filtro]
+    # 10) Gráfica diaria (más fácil de leer)
+    st.subheader("Producción neta diaria vs predicha")
+    st.line_chart(df_daily)
 
-cols_para_mostrar = [c for c in ['Id Maquina','Num Serie','Producción','COIN'] if c in df.columns]
-st.dataframe(
-    df[cols_para_mostrar]
-      .sort_values(by='Producción', ascending=False)
-      .reset_index(drop=True),
-    use_container_width=True
-)
-
-st.markdown("---")
-st.caption("Proyecto de predicción con LSTM | Taller Integrador – 2025")
+    # 11) Gráfica por bloque (opcional)
+    if st.checkbox('Mostrar producción por bloque'):
+        st.subheader('Producción Real vs Predicha por bloque')
+        st.line_chart(df_pred.set_index('Fecha')[['Real','Predicho']])
