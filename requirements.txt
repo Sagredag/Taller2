@@ -1,10 +1,7 @@
-streamlit>=1.24.0
+streamlit
 pandas
 numpy
+openpyxl
 scikit-learn
 tensorflow
-statsmodels
-seaborn
-openpyxl
-plotly
-openpyxl
+matplotlib
