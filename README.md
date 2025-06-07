@@ -1,1 +1,1 @@
-Proyecto Universitario
+Taller Integrador - 2025
